@@ -17,7 +17,58 @@ function tick_spring<T>(ctx: TickContext<T>, last_value: T, current_value: T, ta
 		const velocity = (current_value - last_value) / (ctx.dt || 1 / 60); // guard div by 0
 		const spring = ctx.opts.stiffness * delta;
 		const damper = ctx.opts.damping * velocity;
-		const acceleration = (spring - damper) * ctx.inv_mass;
+		let acceleration = (spring - damper) * ctx.inv_mass;
+
+		//console.log({delta, velocity, spring, damper, acceleration})
+
+		/*
+		delta is pixels
+		velocity is pixels per frame (17ms)
+		spring is pixels per frame per frame (acceleration)   (a force proportional to distance from target)
+		damper is pixels per frame per frame (acceleration)   (a force proportional to velocity)
+
+
+		a damping of 1 will remove all velocity in 1 frame
+		a damping of 0 will never decelerate (so velocity w)
+
+		a stiffness of 0 will never increase from 0
+		a stiffness of 1 will jump from 0 to target in 1 frame
+
+		For 100 diff:
+			spring is 100*0.15 = 15
+			damping is 0.8*velocity
+			so terminal speed (at which damping = spring) = 15/0.8 = 18.75
+
+		damping is the percentage of velocity that is 
+
+		velocity += acceleration * ctx.dt
+		d = velocity * ctx.dt
+
+		dt is in frames (1/60s long each = ~17ms)
+
+		with a*=dt:
+		11.1917 - 11.2482
+
+		without a*=dt:
+		11.3069 - 11.2972
+
+		fot defaults:
+		without dt:
+		67.7526 69.8029
+
+		with dt:
+		66.5355 69.6538
+
+		for no damping:
+
+		without dt:
+		199.47 201.12
+
+		with dt:
+		169.23 177.26
+		*/
+		//acceleration *= ctx.dt;
+
 		const d = (velocity + acceleration) * ctx.dt;
 
 		if (Math.abs(d) < ctx.opts.precision && Math.abs(delta) < ctx.opts.precision) {
@@ -49,8 +100,6 @@ interface SpringOpts {
 	stiffness?: number;
 	damping?: number;
 	precision?: number;
-	tick?: number;
-	limit?: number;
 }
 
 interface SpringUpdateOpts {
@@ -66,13 +115,15 @@ export interface Spring<T> extends Readable<T>{
 	precision: number;
 	damping: number;
 	stiffness: number;
-	tick: number;
-	limit: number;
 }
 
 export function spring<T=any>(value?: T, opts: SpringOpts = {}): Spring<T> {
 	const store = writable(value);
-	const { stiffness = 0.15, damping = 0.8, precision = 0.01, tick = 16, limit = 30 } = opts;
+	const { stiffness = 0.15, damping = 0.8, precision = 0.01 } = opts;
+
+	//for per second: const { stiffness = 9, damping = 480, precision = 0.01 } = opts;
+
+	//for framer motion: stiffness = 100, damping = 10
 
 	let last_time: number;
 	let task: Task;
@@ -114,31 +165,22 @@ export function spring<T=any>(value?: T, opts: SpringOpts = {}): Spring<T> {
 
 				inv_mass = Math.min(inv_mass + inv_mass_recovery_rate, 1);
 
-				last_time = Math.max(last_time, now - tick * limit);
-				while ( last_time < now ) {
-					const elapsed = Math.min(tick, now - last_time);
-					last_time += elapsed;
-
 				const ctx: TickContext<T> = {
 					inv_mass,
 					opts: spring,
 					settled: true, // tick_spring may signal false
-					dt: elapsed * 60 / 1000
+					dt: (now - last_time) * 60 / 1000
 				};
 				const next_value = tick_spring(ctx, last_value, value, target_value);
 
 				last_time = now;
 				last_value = value;
-				value = next_value;
+				store.set(value = next_value);
 
 				if (ctx.settled) {
 					task = null;
-					store.set(value);				
-					return false;
 				}
-				}
-				store.set(value);				
-				return true;
+				return !ctx.settled;
 			});
 		}
 
@@ -155,9 +197,7 @@ export function spring<T=any>(value?: T, opts: SpringOpts = {}): Spring<T> {
 		subscribe: store.subscribe,
 		stiffness,
 		damping,
-		precision,
-		tick,
-		limit
+		precision
 	};
 
 	return spring;
